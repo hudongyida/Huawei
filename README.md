@@ -1,2 +1,0 @@
-# Huawei
-huawdatacom exam note
