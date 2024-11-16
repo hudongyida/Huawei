@@ -537,3 +537,258 @@ OSPF认证支持区域认证和接口认证，当两种认证都存在的时候�
 接口认证：相邻路由器的直连接口的认证模式必须一致，否则无法连理邻接关系
 
 ## IS-IS
+
+IS-IS是OSI中的一种路由链路状态协议，由于在部分场景下OSPF的计算性能可能不够用，所以ISO将ISIS中的部分概念魔改到看TCP/IP体系下
+
+### 核心思想
+
+同OSPF将路由进行分区，然后进行区间路由计算，并且由DIS【OSPF中的DR概念】广播同步链路转态
+
+### 基础术语/参数/概念
+
+NSAP网络服务访问点，类似TCP/IP模型中IP地址的概念
+
+NSAP构成
+
+```
+|<-------------------NASP--------------------->|
+|<---IDP--->|<----------------DSP------------->|
+************************************************
+* AFI * IDI * High Order DSD * System ID * SEL *
+************************************************
+|              1-138         |    6      |  1  |  单位Byte
+```
+
+IDP 类似于TCP/IP中的网络号，AFI可以理解为机构，IDI为区域【AFI和IDI 概念不重要】
+DSP 类似于TCP/IP中的子网号和主机地址，High Order DSD为区域号， System ID为主机号，SEL为协议号
+
+NET
+可以理解为网络中的实体，一个特殊的NSAP，SEL字段为00
+例：
+49.00001.0000.0000.0001.00
+
+```
+          Area ID                 System ID      SEL
+           49.00001.             0000.0000.0001.  00
+* AFI * IDI * High Order DSD *     System ID   * SEL *
+```
+
+区域：
+ISIS同OSPF一样存在区域划分，在OSI中设计规划时候划分了3中AS区，但在想TCP/IP迁移的时候做了部分的阉割【修改】，只将区域划分成了2级
+骨干区域和非骨干群
+
+路由器的分类
+Level-1
+若路由器为该级别表示改路由器工作在**非骨干区域**
+
+Level-1-2【默认】
+若路由器为该级别表示改路由器工作在骨干区和非骨干区，可以理解为OSPF中的非ABR路由
+
+Level-2
+若路由器为该级别表示改路由器工作在**骨干区域**
+
+ISIS支持的网络类型
+
+1. 关播Broadcast 【Ethernet】
+2. 点到点p2p
+
+ISIS开销计算:
+isis的开销计算有三种计算方式
+
+- 全局计算，为所有接口设置统一的开销
+- 接口开销，为单个设置一个开销
+- 自动计算开销，根据接口带宽自动计算开销，开销计算方式同OSPF cost=100/接口带块
+  需要注意，由于历史原因，自动计算开销的类型为narrow【最大值为63】但是后来的规定中填了的Wide【最大16777215】类型，而华为路由器的ISIS路由默认采用的narrow类型
+
+ISIS报文格式：
+ISIS报文是直接封装在数据链路层中的
+ISIS报文头部中可以分为专用头部和通用头部
+
+ISIS通用头部
+
+```
+**********************************************
+* Intradomain Routing Protocol Discriminator *
+*               PDU Huader Length            *
+*       Version/Protocol ID Extension        *
+*            System ID Length                *
+* R * R * R *    PDU type                    *
+*                version                     *
+*                Reserved                    *
+*                MAX Areas                   *
+**********************************************
+```
+
+Intradomain Routing Protocol Discriminator: 区域路由选择协议*固定 0X83*
+PDU Huader Length: ISIS 报文头长度【包括通用和专用头部】
+Version/Protocol ID Extension: 版本号*固定0X01*
+System ID Length: System ID长度
+R: 固定保留为 值为0
+version: *固定0X01*
+MAX Areas: 支持的最大区域个数
+
+ISIS报文类型：
+报头中的PDU type类型
+一共9种报文，但是可以分成4中类型
+IIH: 类似于OSPF中的Hello报文
+    L1 LAN IIH    L2 LAN IIH    P2P IIH
+LSP：类似于OSPF中的LSA
+    L1LSP   L2LSP
+CSNP【SNP】：类似于OSPF中的带链路数据的DD带报文，即链路摘要数据
+    L1 CSNP   L2 CSNP
+PSNP【SNP】：类似于OSPF中的LSR和LSACK
+    L1 PSNP   L2 PSNP
+
+IIH 报文：
+同OSPF用于建立和维护邻接关系
+
+IIH报文格式：【P2P和关播类型*LAN IIH*不一样】
+
+```
+*************************
+*   PDU Common Header   *
+* Reserved/Circuit type *
+*      Source ID        *
+*     Holding Time      *
+*      PDU Length       *
+* R *   Priority        *
+* LAN ID 【仅LAN IIH】/ Local Circuit ID*【仅在P2P IIH】*
+* variable Length Fields*
+*************************
+```
+
+Reserved/Circuit type: 标识路由器类型
+Priority：DIS选举优先级0-127越大越优先
+LAN ID： DIS的System ID和伪节点ID
+Local Circuit ID：本地链路ID
+
+DIS伪节点：
+可以理解为OSPF中的DR
+DIS负责创建和生成伪节点和生成伪节点的LSP
+DIS的选举规则：
+
+1. DIS比较DIS的优先级，最大的直接被选为DIS
+2. 若优先级相同，则MAC地址最大的被选择为DIS
+   DIS和DR的区别
+
+- DIS优先级为0也会参加选举，但OSPF的优先级为0则不会
+- DIS运行抢占，但是OSPF不允许
+- DIS中所有路由器都会形成邻接关系，OSPF中只有DR和BDR会建立邻接关系
+
+LSP：
+可以理解为OSPF中的LSA
+LSP分为两种，Level-1 LSP和Level-2 LSP，对应的是Level-1接口和Level-2接口，而Level-1-2接口则可以同时处理这两种LSP
+LSP报文格式
+
+```
+**************************
+*   PDU Common Header    *
+*      PDU Length        *
+*   Remaining Lifetime   *
+*        LSP ID          *
+*     Sequence Number    *
+*       Checksum         *
+* P * ATT * OL * IS Type *
+* variable Length Fields *
+**************************
+```
+
+Remaining Lifetime： LSP生存时间，以秒为单位
+LSP ID：System ID + 伪节点ID + LSP分片后的编号
+Sequence Number： LSP序列号
+Checksum： 校验和
+P：保留字段
+ATT： 由level-1-2产生，可以理解为是否为ABR路由器，为1则是ABR路由器，0则不是
+OL： 过载位标识，在路由器内存不住是才会设置该表示
+IS Type：路由器表示，指明是Level-1还是Level-2路由器
+
+**非**伪节点的LSP
+![sisi_LSP_1](./img/sisi_LSP_1.png)
+AREA ADDR:该LSP来源的区域号
+INTF ADDR:该LSP描述的接口信息
+NAR ID ： 该LSP中描述的邻接信息
+IP-Internal: 该LSP中描述的网段信息
+
+伪节点的LSP：
+![sisi_LSP_2](./img/sisi_LSP_2.png)
+伪节点的LSP中只包含了邻接信息，不包含路由信息
+
+
+
+ISIS的LSDB
+![sisi_LSDB](./img/ISIS-LSBD.png)
+伪节点标识：
+00标识实节点
+非0标识伪节点
+
+
+
+CSNP：同OSPF中的DD报文
+CSNP 包含了该设备LSDB中的LSP摘要信息，路由器通过CSNP判断LSDB是否需要同步
+- 在广播网络上，CSNP由DIS定期发送【默认10秒】
+- 在点对点网络上CSNP只在第一次建立邻接关系时候发送
+报文格式
+```
+**************************
+*    PDU Common Header   *
+*        PDU Length      *
+*         Source ID      *
+*        Start LSP ID    *
+*        End LSP ID      *
+* variable Length Fields *
+```
+Source ID: 发出CSNP报文的System ID 
+Start LSP：CSNP 报文中的第一个LSP ID值
+End LSP ID：CSNP 报文中的最后一个LSP ID值
+
+
+PSNP：同OSPF中的LSR和LSACK
+当路由器发现自己的LSDB不同步的时候会发送PSNP请求新的LSP
+收到LSP的时候会使用PSNP进行同步
+报文格式:
+```
+**************************
+*    PDU Common Header   *
+*        PDU Length      *
+*         Source ID      *
+* variable Length Fields *
+```
+Source ID: 发出PSNP的路由器的system ID
+
+### 工作原理
+
+#### ISIS邻接关系建立过程：
+关系建立原则：
+- 必须处于同一层级
+- Area ID必须一致
+- ISIS接口的网络类型必须一致
+- ISIS地址接口必须处于同一网段
+- 开销计算模式必须一样
+
+广播型网络建立邻接的过程: 
+R1和R2同时发送IIH报文
+假设R2先收到R1的IIH报文
+
+- R2收到R1发出的IIH报文，但是邻居列表中没有自己【接口进入从Down 改为 Initial】
+- 然后R2将R1的System ID添加到自己的邻居列表中，并且再次发出IIH报文
+- R1 收到了R2 发出的IIH报文，并且在邻居列表中发现了自己的System ID此时会将R2的System ID添加到自己的邻居列表中并且发出IIH报文【接口从Down直接转为UP转态】
+- R2再次收到R1发出的IIH报文，发现邻居列表中存在自己的System ID 【接口转态将从Initial 修改为 UP状态】
+- 邻接关系建立完成
+
+
+
+点对点型网络建立邻接的过程: 
+点对点网络在建立邻接关系时只需要进行两位握手即可，即收到IIH 报文直接进入UP转态
+但是2次握手存在明显缺陷，即无法解决单点通讯问题
+所在华为路由器中设置，点对点网络中建立通讯依然需要需要3次握手
+
+广播型LSP同步过程
+点对点网络LSP同步过程
+
+
+```
+广播网络工作原理简述：
+- DIS路由器已10s的速度在网络发生CSNP摘要，以供其他路由同信息
+- 其他路由器发现自己的LSDB不同步的时候变会发PSNP请求对应的LSP
+- DSI收到后会发生想对应的LSP以供同步
+```
