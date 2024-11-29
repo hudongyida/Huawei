@@ -2097,3 +2097,142 @@ BFD回声功能，用于实现BFD设备和非BFD设备之间的链路检测
 2. 路由B虽然为开启BFD，但依然会对这个IP报文给予转发
 3. 若路由器A收到了自己之前发出的IP报文，即IP地址的原地址和目标自己都为自己的IP数据报时，则认为链路正常
 
+## VRRP
+VRRP 能将多台路由器虚拟成一台逻辑路由器
+虚拟之后的路由器具有相同通的MAC地址和IP地址
+
+VRRP报文格式,基于组播的方式转发
+```
+***************************************
+*Ethernet Header*IP Header*VRRP Packet*
+***************************************
+
+VRRP Packet部分报文字段
+*************************************************
+*Ver*Type*Virtual Rtr ID*Priority*Count IP Addrs*
+* Auth Type * Adver Int *      Checksum         *
+*                IP Address...                  *
+*            Authentication Data...             *
+*************************************************
+```
+Ver: VRRP目前有两个版本，V2用于V4网络
+Virtual Rtr ID: 关联的虚拟路由标识
+Priority: 优先级
+Count IP Addrs: VRRP报文中包含的虚拟IP地址的数量
+Auth Type: VRRP支持的三种认证，不认证，纯文本认证，MD5认证
+Adver Int: 发生VRRP通过消息的间隔，默认1s
+IP Address: 虚拟路由器的虚拟IP地址，可以为多个
+Authentication Data: 验证所需要密码信息
+
+
+路由器角色:
+Master路由器: 主路由，负责网络数据包的转发
+Backup路由器: 备份路由，当Master路由器故障时Backup路由器将接替Master转发数据流量
+
+VRRP状态机
+Initialize: 初始
+Master: 活动状态
+Backup: 备份状态
+
+VRRP计时器:
+VRRP定义了两个计时器
+ADVER_INTERVAL: Master发生VRRP通过报文的时间周期，缺省为1s
+MASTER_DOWN: Backup设备侦听该计数器超时后会变成Master状态
+
+### 工作原理
+1. 两台路由器同时启动设备工作在【Initialize】模式下
+2. 在配置VRRP，接口收到VRRP报文后接口会检查优先级，若小于255则接口进入Backup模式
+3. 并且等待MASTER_DOWN计时器超时，超时后会切换到Master状态
+4. 然后路由器再进行选举，优先级高的路由器进入Master状态，优先级低的进入Backup状态
+5. 若优先级一样则比较接口IP地址，IP地址大的为Master
+6. Master路由器会立马发生免费ARP报文，通告虚拟MAC地址
+注意: 若接口地址和VRRP配置的地址一样是，则不参加选举，优先级255，启动时自动为Master路由器
+
+主备切换:
+- 主动切换: 假设Master要退出VRRP时会发送优先级为0的报文，此时Backup路由器收到报文后将立刻切换为Master路由器
+- 被动切换: 链路故障切换，当链路故障时，需要等待MASTER_DOWN计时器超时，超时后会认为Master设备故障，自动切换成Master设备
+
+VRRP主备回切:
+在主设备A故障时，由备设备B负责业务数据转发，当主设备A再次上线时VRRP设备状态
+- 抢占模式: 当主设备A上线时候，B发现A的优先级比自己高，则立刻变成Backup状态，A将立刻变成Master状态
+- 非抢占模式: 当主设备A上线时,B优先级比自己低，此时也不会发生抢占，除非B设备故障
+
+VRRP负责分担
+可以在两个路由上配置VRF，并且在两条路由上分别配置不同的路由属性，配置两套VRRP，实现负责分担
+
+## DHCP
+自动地址分配协议
+
+DHCP报文
+```
+****************************
+* OP * Htype * Hlen * Hops *
+*             Xid          *
+*    Secs    *   Flags     *
+*          Ciaddr          *
+*          Yiaddr          *
+*          Siaddr          *
+*          Giaddr          *
+*          Chaddr          *
+*          Sname           *
+*           File           *
+*     Options【variable】  *
+****************************
+```
+OP: 1为客户端，2为服务器
+Htype: 硬件地址类型
+Hlen: 硬件地址长度
+Hops: DHCP Relay数目，每经过一次数值+1【DHCP Relay中生效】
+Xid: 随机数，用于区分不同的DHCP报文
+Secs: 客户端填充，标识IP地址租借后使用的秒数
+Flags: 服务器响应报文的形式，最高位位0时为单播，最高位为1时为广播响应
+Yiaddr: 服务器分配给客户端的IP地址
+Siaddr: DHCP 服务器地址 
+Giaddr: 第一个DHCP地址池地址，在回复DHCP时会填入该字段 【DHCP Relay中生效】
+Chaddr: 客户端MAC地址
+Options: DHCP 通过此字段包含了服务器分配给终端的配置信息
+
+Options字段介绍:
+![options](./img/DHCP_Options.png)
+
+
+
+工作原理:
+1. 设备发出DHCP Discover 关播报文
+2. 服务器收到DHCP Discover后会回复 DHCP Offer单播/关播
+3. 客户端收到DHCP Offer后会回复 DHCP Request广播报文确认
+4. 服务器收到DHCP Requset 后会基于DHCP ACK 单播 确认
+
+DHCP地址续租；
+1. 当设备租期到达最大租期的一半的时候会以单播的形式向DHCP服务器发送 DHCP Request报文，若服务器回复了DHCP ACK后则表示同意续租，若未回复则表示不同意续租
+2. 若第一次的续租为同意则会在租期到达 87.5%的时候客户端会以广播的形式向DHCP服务器发送DHCP Request报文，若服务器回复了DHCP ACK后则表示同意续租，若未回复则表示不同意续租
+3. 若上面的两次续租请求都为同意则在租期满的时候过期IP地址，并且从新执行DHCP地址请求
+
+DHCP客户端请求曾用地址
+1. DHCP客户端**再次**加入网络的时候会请求之前自己使用的DHCP地址
+2. 客户端发送DHCP Requset报文，报文中的Option 50字段中有自己之前用过的地址
+3. 服务器收到后会查询响应的租约记录如果有则发送DHCP ACK，若没有则不予响应
+
+DHCP地址分配顺序
+1. MAC绑定的静态IP地址
+2. 曾经使用过的地址
+3. 空闲状态IP
+4. 超过租期的IP
+5. 冲突IP
+
+### DHCP relay
+即DHCP中继
+可以实现跨网的DHCP服务器配置
+
+报文格式同DHCP报文
+
+工作原理；
+假设现在存在下面设备
+DHCP客户端A DHCP服务器S1 DHCP中继设备S2
+1. A发出请求报文DHCP Discover【广播】
+2. S2收到后会将该报文发给【单播】S1
+3. S1将DHCP Offer发给S2【单播】
+4. S2将DHCP Offer在A所在的网络单播/广播
+5. A发送广播DHCP Request
+6. S2收到后会讲DHCP Request发给S1【单播】
+7. S1发出DHCP ACK给S2【单播】S2再转发给A【单播】
